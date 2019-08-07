@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <!-- Required meta tags -->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+
+    <title>Swagger2Schema - Capgemini</title>
+  </head>
+  <body>
+    <div id="app">
+        <div  class="container mt-5">
+            <h1>Swagger2Schema Converter</h1>
+            <p class="lead">Este conversor genera jsonschema (draft4) a partir de un swagger (2.0).</p>
+        </div>
+
+        <div class="container">
+            <div class="alert alert-danger" v-if="errorMessage">
+               <b>Error:</b> {{ errorMessage }}
+            </div>
+        </div>
+
+        <div  class="container mt-5">
+            <h2>Paso 1 - <small>Fichero swagger</small></h2>
+            <p>Selecciona el fichero swagger de entrada.</p>
+            <input type="file" v-if="!fileRead" @input="onFile" accept="application/json" />
+            <div class="alert alert-success" v-if="fileRead">
+                <ul>
+                    <li><b>Nombre: </b> {{ swagger.name }}</li>
+                    <li><b>Versión: </b> {{ swagger.version }}</li>
+                </ul>
+            </div>
+        </div>
+
+        <div  class="container mt-5" v-if="fileRead">
+            <h2>Paso 2 - <small>Genera los schema</small></h2>
+            <p>Selecciona el schema y pulsa en Descargar:</p>
+            <div class="alert alert-danger" v-if="!swagger.definitions.length">
+                No se han encontrado definiciones...
+            </div>
+            <div class="pl-4">
+                <div class="form-group form-check" v-for="definition in swagger.definitions">
+                    <input type="radio" class="form-check-input" :id="definition" :value="definition" v-model="selectedSchema">
+                    <label class="form-check-label" :for="definition">{{ definition }}</label>
+                </div>
+            </div>
+            <button :disabled="!selectedSchema" class="btn btn-primary btn-lg" @click="downloadSchema()">Descargar {{ selectedSchema }}</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+    <script>
+        // Todo el código está autocontenido para evitar dependencias y poder ejecutarlo sin necesidad de un servidor.
+        const app = new Vue({
+            el: '#app',
+            data: {
+                errorMessage: '',
+                fileRead: false,
+                picked: '',
+                swagger: {
+                    name: '',
+                    version: '',
+                    definitions: [  ],
+                    definitionsData: {}
+                },
+                selectedSchema: '',
+                _swaggerFile: {}
+            },
+            methods: {
+                onFile: function(ev) {
+                    // validate
+                    this.errorMessage = ''
+                    this._swaggerFile = {}
+                    const file = ev.target.files[0]
+                    if (!file) {
+                        this.errorMessage = 'No se puede leer el fichero'
+                    } else if (file.type != 'application/json') {
+                        this.errorMessage = 'El fichero debe ser un JSON'
+                    }
+                    // Read the file content as json
+                    const reader = new FileReader()
+                    console.log('Vamos a leer')
+                    reader.onload = () => {
+                        console.log('Reading file', file)
+                        try {
+                            this._swaggerFile = JSON.parse(reader.result)
+                            console.log('Read!', this._swaggerFile)
+                            this._processSwagger(this._swaggerFile)
+                        } catch (e) {
+                            this.errorMessage = 'Error leyendo el swagger. ¿Es un JSON válido?'
+                            console.error(e)
+                        }
+                    }
+                    reader.readAsText(file)
+                },
+                _processSwagger(swagger) {
+                    console.log('processing swagger', swagger)
+                    this.swagger.name = swagger.info.title
+                    this.swagger.version = swagger.info.version
+                    // Leer los endpoints
+                    Object.keys(swagger.paths).forEach(pathId => {
+                        const path = swagger.paths[pathId]
+                        Object.keys(path).forEach(method => {
+                            const opId = path[method]['operationId'].split(".").pop()
+                            // Body de entrada
+                            try {
+                                const bodySchema = path[method].parameters.find(param => param.in == "body").schema
+                                if (bodySchema) {
+                                    this.swagger.definitionsData[`${opId}.in`] = bodySchema
+                                }
+                            } catch(e) {} // No es un error. Puede no tener
+                            // Body de salida
+                            Object.keys(path[method]['responses']).forEach(resCode => {
+                                try {
+                                    const resSchema = path[method]['responses'][resCode].schema
+                                    if (resSchema) {
+                                        this.swagger.definitionsData[`${opId}.out.${resCode}`] = resSchema
+                                    }
+                                } catch (e) {} // No es un error. Puede no tener
+                            })
+                        })
+                    })
+                    this.swagger.definitions = Object.keys(this.swagger.definitionsData)
+                    this.fileRead = true
+                    console.log('ENDPOINTS', this.swagger.endpoints)
+                },
+                _generateSchema(swagger, definition) {
+                    const schemaFile = {
+                        "$schema": "http://json-schema.org/draft-04/schema#",
+                        ...this.swagger.definitionsData[definition],
+                        definitions: swagger.definitions
+                    }
+                    return JSON.stringify(schemaFile, null, 2)
+                },
+                downloadSchema() {
+                    const fileContent = this._generateSchema(this._swaggerFile, this.selectedSchema)
+                    console.log(fileContent)
+                    this._downloadFile(
+                        `${this.swagger.name}.${this.swagger.version}.${this.selectedSchema}.schema.json`,
+                        fileContent,
+                        'application/json'
+                    )                    
+                },
+                _downloadFile(filename, content, mimetype) {
+                    const el = document.createElement('a')
+                    el.setAttribute('href', 'data:' + mimetype +';charset=utf-8,' + encodeURIComponent(content))
+                    el.setAttribute('download', filename) //TODO
+                    el.style.display = 'none'
+                    document.body.appendChild(el)
+                    el.click()
+                    document.body.removeChild(el)
+                }
+            }
+        })
+    </script>
+  </body>
+</html>
